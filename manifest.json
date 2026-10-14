@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PerfectMind Badminton Timetable",
-  "version": "1.0.6",
+  "version": "1.1.0",
   "incognito": "split",
   "description": "Combine available 30-minute slots for University of Melbourne badminton courts A–H.",
   "permissions": ["scripting", "storage"],

@@ -72,8 +72,10 @@ async function check({limit, failCourt, cancel = false}) {
   await pause(0); // Allow saved-state initialisation to finish.
   element('from').value = '2026-10-26'; element('to').value = '2026-10-30';
   element('time-from').value = '14:00'; element('time-to').value = '22:00';
-  element('parallel').value = String(limit);
   const run = vm.runInContext('start({preventDefault(){}})', context);
+  assert.equal(element('checking-loader').hidden, false);
+  assert.match(element('checking-message').textContent, /background tab/);
+  assert.match(element('checking-message').textContent, /Please wait/);
   if (cancel) { await pause(3); vm.runInContext('requestStop()', context); }
   await run;
   assert.equal(live.size, 0, 'all owned loading tabs must be closed');
@@ -82,7 +84,7 @@ async function check({limit, failCourt, cancel = false}) {
   assert.equal(peakWriters, 1, 'snapshot writes must be serialised');
   assert.equal(element('start').disabled, false);
   assert.equal(element('stop').disabled, true);
-  assert.equal(element('parallel').disabled, false);
+  assert.equal(element('checking-loader').hidden, true, 'hide the loading notice on success, failure and stop');
   if (cancel) {
     assert.ok(created.length <= limit, 'cancel must not launch queued courts');
     assert.equal(saved.errors.length, 0, 'cancellation is not a court failure');
@@ -101,8 +103,8 @@ async function check({limit, failCourt, cancel = false}) {
 }
 
 (async () => {
-  for (const limit of [1, 2, 4, 8]) await check({limit});
-  await check({limit: 4, failCourt: 'C'});
-  await check({limit: 4, cancel: true});
-  console.log('Passed: concurrency 1/2/4/8, inactive tabs, window isolation, result merging, serialised storage, failure isolation, stop and cleanup.');
+  await check({limit: 8});
+  await check({limit: 8, failCourt: 'C'});
+  await check({limit: 8, cancel: true});
+  console.log('Passed: all-eight concurrency, inactive tabs, loading notice, window isolation, result merging, serialised storage, failure isolation, stop and cleanup.');
 })().catch(error => {console.error(error); process.exitCode = 1;});

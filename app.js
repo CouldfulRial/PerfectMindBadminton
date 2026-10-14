@@ -8,9 +8,11 @@ const COURTS = [
   {letter:'G',name:'West G',id:'4a1cefdc-7fc6-434b-b1cc-aef762116251'},
   {letter:'H',name:'West H',id:'30d9b4e5-7053-4c66-ae12-2ba86a46bad8'}
 ];
+const PARALLEL_COURTS=COURTS.length;
 const $ = id => document.getElementById(id);
 const extension = Boolean(globalThis.chrome?.runtime?.id && chrome.scripting);
-let snapshot = null, running = false, stopped = false;
+let snapshot = null, running = false, stopped = false, bookingBusy = false;
+let selection=null;
 const workerTabs=new Set();
 let persistQueue=Promise.resolve();
 const escapeHtml = s => String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -38,17 +40,39 @@ function durationFits(index,coverage,date,start,duration,limit) {
   }
   return true;
 }
-function slotLink(c,date,time) {
-  const label=`${c.name} · ${date} ${timeText(time)} · Open official timetable`;
-  return `<a class="court court-${c.letter.toLowerCase()} court-link" href="${escapeHtml(facilityUrl(c,date))}" target="_blank" rel="noopener" data-court="${c.letter}" data-date="${date}" title="${label}" aria-label="${label}">${c.letter}</a>`;
+function availabilityIndex(data){
+  const index=new Map();
+  for(const s of data.slots){const key=`${s.date}|${s.start}`;if(!index.has(key))index.set(key,new Set());index.get(key).add(s.court);}
+  return index;
+}
+function buildBookingPlan(slots){
+  const plan=[];
+  for(const slot of slots){
+    const last=plan.at(-1);
+    if(last&&last.court===slot.court&&last.date===slot.date&&last.start+last.duration===slot.start)last.duration+=30;
+    else plan.push({court:slot.court,date:slot.date,start:slot.start,duration:30});
+  }
+  return plan;
+}
+function slotChoiceState(court,date,start){
+  const picked=selection?.slots.findIndex(s=>s.court===court&&s.date===date&&s.start===start)??-1;
+  const next=selection?selection.start+selection.slots.length*30:null;
+  const enabled=!running&&!bookingBusy&&!selection?.opened&&picked<0&&(!selection||(date===selection.date&&start===next&&selection.slots.length*30<selection.duration));
+  return {picked:picked>=0,initial:picked===0,enabled};
+}
+function slotLink(c,date,time,duration,bookingLinks=true) {
+  const state=bookingLinks?slotChoiceState(c.letter,date,time):{enabled:true,picked:false,initial:false};
+  const action=bookingLinks?(state.picked?'Selected 30-minute session':state.enabled?'Select this 30-minute session':'Not selectable now'):'Open official timetable';
+  const label=`${c.name} · ${date} ${timeText(time)}–${timeText(time+30)} · ${action}`;
+  const classes=`${state.picked?' slot-picked':''}${state.initial?' slot-initial':''}${!state.enabled&&!state.picked?' slot-locked':''}`;
+  return `<a class="court court-${c.letter.toLowerCase()} court-link${classes}" href="${escapeHtml(facilityUrl(c,date))}" target="_blank" rel="noopener" data-court="${c.letter}" data-date="${date}" data-start="${time}"${!state.enabled?' aria-disabled="true" tabindex="-1"':''} title="${label}" aria-label="${label}">${c.letter}</a>`;
 }
 function legendHtml() {return COURTS.map(c=>`<li>${badge(c)}<span>${c.name}</span></li>`).join('');}
 function setCourtState(letter,state,text) {const li=$(`progress-${letter}`);li.dataset.state=state;li.textContent=`${COURTS.find(c=>c.letter===letter).name} · ${text}`;}
 function resetProgress(){ $('court-progress').innerHTML=COURTS.map(c=>`<li id="progress-${c.letter}" data-state="pending">${c.name} · Waiting</li>`).join(''); }
-function renderTable(data,hideEmpty=true,duration=60) {
+function renderTable(data,hideEmpty=true,duration=60,bookingLinks=true) {
   const dates=datesBetween(data.query.from,data.query.to), start=minutes(data.query.timeFrom),end=minutes(data.query.timeTo);
-  const index=new Map();
-  for(const s of data.slots){const key=`${s.date}|${s.start}`;if(!index.has(key))index.set(key,new Set());index.get(key).add(s.court);}
+  const index=availabilityIndex(data);
   const week=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   const dateLabel=new Intl.DateTimeFormat('en-AU',{day:'numeric',month:'short',timeZone:'UTC'});
   const headers=dates.map(d=>`<th scope="col">${dateLabel.format(new Date(d+'T12:00:00Z'))}<span class="weekday">${week[new Date(d+'T12:00:00Z').getUTCDay()]}</span></th>`).join('');
@@ -57,11 +81,17 @@ function renderTable(data,hideEmpty=true,duration=60) {
     let availableCount=0,unknownCount=0;
     const cells=dates.map(d=>{
       const available=index.get(`${d}|${t}`)||new Set();
-      const badges=COURTS.filter(c=>available.has(c.letter)).map(c=>slotLink(c,d,t)).join('');availableCount+=available.size;
+      const badges=COURTS.filter(c=>available.has(c.letter)).map(c=>slotLink(c,d,t,duration,bookingLinks)).join('');availableCount+=available.size;
       const fits=durationFits(index,data.coverage,d,t,duration,end);
       const missing=COURTS.filter(c=>!data.coverage[c.letter]?.[d]);unknownCount+=missing.length;
       const unknown=missing.length?`<span class="unknown" title="${missing.map(c=>c.name).join(', ')} not checked successfully">? ${missing.map(c=>c.letter).join('')}</span>`:'';
-      return `<td${fits?` class="duration-match" title="Courts available for ${duration} consecutive minutes from ${timeText(t)}; switching courts is allowed"`:''}>${badges?`<div class="slots">${badges}</div>`:unknown?'':'<span class="dash">—</span>'}${unknown}</td>`;
+      let attrs=fits?` class="duration-match" title="Courts available for ${duration} consecutive minutes from ${timeText(t)}; switching courts is allowed"`:'';
+      if(bookingLinks&&selection){
+        const picked=selection.slots.some(s=>s.date===d&&s.start===t);
+        const next=!bookingBusy&&!selection.opened&&selection.slots.length*30<selection.duration&&d===selection.date&&t===selection.start+selection.slots.length*30;
+        attrs=` class="${picked?(t===selection.start?'selection-initial':'selection-picked'):next?'selection-next':'selection-muted'}"`;
+      }
+      return `<td${attrs}>${badges?`<div class="slots">${badges}</div>`:unknown?'':'<span class="dash">—</span>'}${unknown}</td>`;
     }).join('');
     if(!hideEmpty||availableCount||unknownCount)rows.push(`<tr><th scope="row">${timeText(t)}–${timeText(t+30)}</th>${cells}</tr>`);
   }
@@ -70,7 +100,33 @@ function renderTable(data,hideEmpty=true,duration=60) {
   return `<p class="snapshot">${data.query.from} to ${data.query.to} · Last checked: ${escapeHtml(captured)} (Melbourne)${incomplete?' · Some courts have not been checked successfully':''}</p><div class="table-wrap" role="region" aria-label="Availability timetable; scroll horizontally to view all dates" tabindex="0"><table><thead><tr><th scope="col">Time slot</th>${headers}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
 }
 function selectedDuration(){const value=Number($('duration').value);return [30,60,90,120].includes(value)?value:60;}
-function render() {if(snapshot){$('result').innerHTML=renderTable(snapshot,$('hide-empty').checked,selectedDuration());$('export').disabled=false;$('json').disabled=false;}}
+function renderSelection(){
+  $('selection-panel').hidden=!selection;
+  if(!selection)return;
+  const total=selection.slots.length*30;
+  $('selection-title').textContent=`${total} / ${selection.duration} minutes selected · ${selection.date}`;
+  $('selected-sessions').innerHTML=selection.slots.map(s=>{const court=COURTS.find(c=>c.letter===s.court);return `<span class="selected-session">${badge(court)}<span>${timeText(s.start)}–${timeText(s.start+30)}</span></span>`;}).join('');
+  $('selection-message').textContent=bookingBusy?'Rechecking your selected sessions and opening the official booking pages. Please wait.':selection.opened?`Opened ${selection.openCount} booking page(s). Complete the orders on PerfectMind.${selection.failure?' '+selection.failure:''}`:selection.failure?selection.failure:`Choose a court for the next half-hour: ${timeText(selection.start+total)}–${timeText(selection.start+total+30)}. Other dates and times are greyed out.`;
+  $('undo-selection').disabled=bookingBusy||selection.opened;
+  $('reset-selection').disabled=bookingBusy;
+  $('retry-booking').hidden=!(total===selection.duration&&!bookingBusy&&!selection.opened&&selection.failure);
+}
+function render() {renderSelection();if(snapshot){$('result').innerHTML=renderTable(snapshot,$('hide-empty').checked,selectedDuration());$('export').disabled=false;$('json').disabled=false;}}
+function resetSelection(){if(bookingBusy)return;selection=null;$('notice').hidden=true;render();}
+function undoSelection(){if(!selection||bookingBusy||selection.opened)return;selection.slots.pop();selection.failure=null;if(!selection.slots.length)selection=null;render();}
+function addSession(court,date,start){
+  if(!snapshot||running||bookingBusy||selection?.opened)throw new Error('Wait for checking to finish, or reset your previous selection.');
+  const index=availabilityIndex(snapshot);
+  if(!snapshot.coverage[court]?.[date]||!index.get(`${date}|${start}`)?.has(court))throw new Error('This session has not been confirmed available.');
+  if(!selection){
+    const duration=selectedDuration();
+    if(!durationFits(index,snapshot.coverage,date,start,duration,minutes(snapshot.query.timeTo)))throw new Error('There are not enough consecutive available sessions from this time for the selected Duration. Choose a highlighted cell or a shorter Duration.');
+    selection={date,start,duration,slots:[],opened:false,failure:null,openCount:0};
+  }
+  if(date!==selection.date||start!==selection.start+selection.slots.length*30||selection.slots.length*30>=selection.duration)throw new Error('Choose one court in the next consecutive half-hour on the selected date.');
+  selection.slots.push({court,date,start,end:start+30});selection.failure=null;
+  return selection.slots.length*30===selection.duration;
+}
 async function waitForTab(id,ignoreStop=false) {
   for(let i=0;i<90;i++) {if(stopped&&!ignoreStop)throw new Error('Stopped');const tab=await chrome.tabs.get(id);if(tab.status==='complete')return;await new Promise(r=>setTimeout(r,500));}
   throw new Error('The official page took too long to load');
@@ -81,7 +137,10 @@ async function persist(){
   persistQueue=persistQueue.catch(()=>{}).then(()=>chrome.storage.local.set({snapshot:saved}));
   await persistQueue;
 }
-function selectedParallel(){const n=Number($('parallel').value);return [1,2,4,8].includes(n)?n:4;}
+function setCheckingLoader(visible,parallel){
+  $('checking-loader').hidden=!visible;
+  if(visible)$('checking-message').textContent=`${parallel>1?`Multiple background tabs (up to ${parallel} at once) will open`:'A background tab will open'} to check the courts. Please wait and keep this panel open. The tabs will close automatically.`;
+}
 async function runCourtPool(items,limit,task,shouldStop){
   let next=0;
   return Promise.allSettled(Array.from({length:Math.min(limit,items.length)},async()=>{
@@ -97,13 +156,14 @@ function requestStop(){
   Promise.allSettled(Array.from(workerTabs,closeWorkerTab));
 }
 async function start(event){
-  event.preventDefault();if(running)return;
-  const query={from:$('from').value,to:$('to').value,timeFrom:$('time-from').value,timeTo:$('time-to').value,parallelCourts:selectedParallel()};
+  event.preventDefault();if(running||bookingBusy)return;
+  const query={from:$('from').value,to:$('to').value,timeFrom:$('time-from').value,timeTo:$('time-to').value,parallelCourts:PARALLEL_COURTS};
   if(query.from>query.to||minutes(query.timeFrom)>=minutes(query.timeTo)||minutes(query.timeFrom)%30||minutes(query.timeTo)%30){$('status').textContent='Check the date order and use start and end times on 30-minute boundaries.';return;}
   if(datesBetween(query.from,query.to).length>42){$('status').textContent='You can check up to 42 days at once. Choose a shorter date range.';return;}
   if(!extension){$('notice').hidden=false;$('notice').textContent='Load this project as an Edge extension, then click its icon to open the panel. Opening the HTML file directly does not grant access to the official website.';return;}
   const startedAt=Date.now();
-  stopped=false;running=true;$('start').disabled=true;$('stop').disabled=false;$('parallel').disabled=true;$('notice').hidden=true;resetProgress();
+  stopped=false;running=true;selection=null;$('start').disabled=true;$('stop').disabled=false;$('notice').hidden=true;resetProgress();
+  setCheckingLoader(true,query.parallelCourts);
   snapshot={version:2,timeZone:'Australia/Melbourne',query,slots:[],coverage:{},diagnostics:[],errors:[],updatedAt:new Date().toISOString()};render();
   let active=0,finished=0;
   const updateProgress=()=>{if(!stopped)$('status').textContent=`Checking in background · ${active} active · ${finished}/8 courts finished (${query.parallelCourts} at a time)`;};
@@ -122,7 +182,7 @@ async function start(event){
           await waitForTab(tabId);if(stopped)break;
           const results=await chrome.scripting.executeScript({target:{tabId},world:'MAIN',func:collectCourtPage,args:[{date:cursor,court:court.letter}]});
           if(stopped)break;
-          const page=results[0]?.result;if(!page?.dates?.includes(cursor))throw new Error('The requested date was not returned');
+          const page=results[0]?.result;if(page?.error)throw new Error(page.error);if(!page?.dates?.includes(cursor))throw new Error('The requested date was not returned');
           snapshot.diagnostics.push({court:court.name,date:cursor,...page.diagnostics});
           for(const d of page.dates)if(d>=query.from&&d<=query.to)snapshot.coverage[court.letter][d]=page.observedAt;
           snapshot.slots.push(...page.slots.filter(s=>s.date>=query.from&&s.date<=query.to));
@@ -144,7 +204,8 @@ async function start(event){
   } catch(error){$('notice').hidden=false;$('notice').textContent=error.message;}
   finally {
     await Promise.allSettled(Array.from(workerTabs,closeWorkerTab));
-    running=false;$('start').disabled=false;$('stop').disabled=true;$('parallel').disabled=false;
+    running=false;$('start').disabled=false;$('stop').disabled=true;
+    setCheckingLoader(false);
     const dates=datesBetween(query.from,query.to);const complete=COURTS.filter(c=>dates.every(d=>snapshot.coverage[c.letter]?.[d])).length;
     const elapsedMs=Date.now()-startedAt;
     snapshot.timing={elapsedMs,parallelCourts:query.parallelCourts};
@@ -156,44 +217,66 @@ function download(name,text,type){const url=URL.createObjectURL(new Blob([text],
 async function exportHtml(){
   const css=await(await fetch('style.css')).text();
   const duration=selectedDuration();
-  const body=`<main><header><h1>Badminton Availability</h1><p class="sub">University of Melbourne · 30-minute slots · Melbourne local time</p></header><p class="duration-note">Highlighted cells have an available court for every 30-minute slot over the next ${duration} minutes, within the displayed range. Switching courts is allowed. Click a court to open its official timetable. Automatic date navigation is available in the extension panel.</p><ul id="legend">${legendHtml()}</ul>${renderTable(snapshot,$('hide-empty').checked,duration)}<footer>— = no available courts; ? = not checked successfully. Results are a snapshot; confirm availability on the official website.</footer></main>`;
+  const body=`<main><header><h1>Badminton Availability</h1><p class="sub">University of Melbourne · 30-minute slots · Melbourne local time</p></header><p class="duration-note">Highlighted cells have an available court for every 30-minute slot over the next ${duration} minutes, within the displayed range. Switching courts is allowed. Click a court to open its official timetable. Direct booking-page navigation is available in the extension panel.</p><ul id="legend">${legendHtml()}</ul>${renderTable(snapshot,$('hide-empty').checked,duration,false)}<footer>— = no available courts; ? = not checked successfully. Results are a snapshot; confirm availability on the official website.</footer></main>`;
   download(`badminton-${snapshot.query.from}-${snapshot.query.to}.html`,`<!doctype html><html lang="en-AU"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Badminton Timetable</title><style>${css}</style></head><body>${body}</body></html>`,'text/html;charset=utf-8');
 }
 async function init(){
-  const today=melbourneToday();$('from').value=today;$('to').value=addDays(today,6);$('parallel').value='4';$('duration').value='60';$('hide-empty').checked=true;$('legend').innerHTML=legendHtml();resetProgress();
+  const today=melbourneToday();$('from').value=today;$('to').value=addDays(today,6);$('duration').value='60';$('hide-empty').checked=true;$('legend').innerHTML=legendHtml();resetProgress();
+  renderSelection();
   if(extension){const saved=await chrome.storage.local.get('snapshot');if(saved.snapshot?.version===2){snapshot=saved.snapshot;for(const [id,key] of [['from','from'],['to','to'],['time-from','timeFrom'],['time-to','timeTo']])$(id).value=snapshot.query[key];$('status').textContent='Restored your last availability snapshot. Click Check availability to refresh.';render();}else if(saved.snapshot){await chrome.storage.local.remove('snapshot');$('status').textContent='Cleared an older snapshot that may contain incorrect empty results. Please check availability again.';}}
   else{$('notice').hidden=false;$('notice').textContent='This is the local extension panel. Follow the README to load it into Edge, then open it using the extension icon.';}
 }
-// Only navigates the official date picker; does not select a slot or reserve.
-async function showOfficialDate(date) {
-  const deadline=Date.now()+45000;
-  while(Date.now()<deadline){
-    const picker=window.jQuery?.('#jump-to-date').data('kendoDatePicker');
-    let model;
-    try {const ko=window.require?.defined?.('knockout')?window.require('knockout'):window.ko;model=ko?.dataFor(document.getElementById('facilityLandingPageModelContainer'));}catch{}
-    if(picker && typeof model?.loading==='function' && !model.loading()){
-      const target=new Date(date+'T00:00:00');
-      if(picker.options.max && target>new Date(picker.options.max))throw new Error('The date is outside the official booking window');
-      picker.value(target);picker.trigger('change');
-      document.getElementById('scheduler')?.scrollIntoView({block:'center'});
-      return;
-    }
-    await new Promise(resolve=>setTimeout(resolve,250));
-  }
-  throw new Error('Date navigation timed out. Use Jump To Date on the official website');
-}
-async function onSlotClick(event){
-  const link=event.target.closest('a.court-link');if(!link||!extension||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;
-  event.preventDefault();const court=COURTS.find(c=>c.letter===link.dataset.court);const date=link.dataset.date;
-  if(!court||!/^\d{4}-\d{2}-\d{2}$/.test(date))return;
+async function openSelectedBookings(){
+  if(!selection||bookingBusy||selection.opened||selection.slots.length*30!==selection.duration)return;
+  const current=selection,plan=buildBookingPlan(current.slots),pending=new Set(),opened=[];
+  bookingBusy=true;current.failure=null;$('start').disabled=true;$('duration').disabled=true;$('notice').hidden=true;render();
   try{
-    const tab=await chrome.tabs.create({url:facilityUrl(court,date),active:true});
-    await waitForTab(tab.id,true);
-    await chrome.scripting.executeScript({target:{tabId:tab.id},world:'MAIN',func:showOfficialDate,args:[date]});
-  }catch(error){$('status').textContent=`The official page opened, but date navigation failed: ${error.message}. Use Jump To Date on the official website.`;}
+    const panel=await chrome.tabs.getCurrent();
+    if(!Number.isInteger(panel?.windowId))throw new Error('Reopen the extension panel and try again.');
+    const checks=await Promise.allSettled(plan.map(async segment=>{
+      const court=COURTS.find(c=>c.letter===segment.court);
+      const tab=await chrome.tabs.create({url:facilityUrl(court,segment.date),windowId:panel.windowId,active:false});pending.add(tab.id);
+      await waitForTab(tab.id,true);
+      const results=await chrome.scripting.executeScript({target:{tabId:tab.id},world:'MAIN',func:prepareOfficialBooking,args:[{facilityId:court.id,date:segment.date,start:segment.start,duration:segment.duration}]});
+      const result=results[0]?.result;
+      if(result?.error)throw new Error(`${court.name} ${timeText(segment.start)}: ${result.error}`);
+      if(!result?.url)throw new Error(`${court.name}: unable to prepare the booking page.`);
+      const target=new URL(result.url);
+      if(target.origin!=='https://unimelb.perfectmind.com'||!/^\/32617\/Clients\/BookMe4EventParticipants\/FacilityBooking\/?$/.test(target.pathname))throw new Error('The booking destination could not be verified.');
+      return {tabId:tab.id,url:target.href};
+    }));
+    const failure=checks.find(check=>check.status==='rejected');
+    if(failure)throw failure.reason;
+    for(const check of checks){
+      await chrome.tabs.update(check.value.tabId,{url:check.value.url,active:false});
+      pending.delete(check.value.tabId);opened.push(check.value.tabId);
+    }
+    current.opened=true;current.openCount=opened.length;
+    $('notice').hidden=false;$('notice').textContent=`Opened ${opened.length} official booking page(s). PerfectMind will prompt for login if needed. Review the sessions and complete each order there.`;
+  }catch(error){
+    current.failure=error.message||'Unable to open the selected booking pages.';
+    current.openCount=opened.length;current.opened=opened.length>0;
+    $('notice').hidden=false;$('notice').textContent=`${opened.length?`${opened.length} page(s) opened. `:'No booking pages were opened. '}${current.failure}`;
+  }finally{
+    await Promise.allSettled(Array.from(pending,id=>chrome.tabs.remove(id)));
+    bookingBusy=false;$('start').disabled=running;$('duration').disabled=false;render();
+    if(opened.length)await chrome.tabs.update(opened[0],{active:true}).catch(()=>{});
+  }
 }
-$('duration').addEventListener('change',render);
+function onSlotClick(event){
+  const link=event.target.closest('a.court-link');if(!link||!extension)return;
+  if(link.getAttribute('aria-disabled')==='true'){event.preventDefault();return;}
+  if(event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;
+  event.preventDefault();const court=COURTS.find(c=>c.letter===link.dataset.court),date=link.dataset.date,start=Number(link.dataset.start);
+  if(!court||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isInteger(start)||start<0||start>=1440||start%30)return;
+  try{const ready=addSession(court.letter,date,start);$('notice').hidden=true;render();if(ready)openSelectedBookings();}
+  catch(error){$('notice').hidden=false;$('notice').textContent=error.message;}
+}
+$('duration').addEventListener('change',resetSelection);
+$('undo-selection').addEventListener('click',undoSelection);
+$('reset-selection').addEventListener('click',resetSelection);
+$('retry-booking').addEventListener('click',openSelectedBookings);
 $('result').addEventListener('click',onSlotClick);
 $('query').addEventListener('submit',start);$('stop').addEventListener('click',requestStop);$('hide-empty').addEventListener('change',render);$('export').addEventListener('click',()=>exportHtml().catch(e=>{$('status').textContent=`Export failed: ${e.message}`;}));$('json').addEventListener('click',()=>download('badminton-availability.json',JSON.stringify(snapshot,null,2),'application/json'));
-window.addEventListener('beforeunload',event=>{if(running){event.preventDefault();event.returnValue='';}});
+window.addEventListener('beforeunload',event=>{if(running||bookingBusy){event.preventDefault();event.returnValue='';}});
 init().catch(e=>{$('status').textContent=`Initialisation failed: ${e.message}`;});

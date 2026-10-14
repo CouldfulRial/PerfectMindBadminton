@@ -1,5 +1,6 @@
 /* This function is serialized by chrome.scripting: keep it self-contained. */
 async function collectCourtPage(request) {
+  try {
   if (location.hostname !== 'unimelb.perfectmind.com') throw new Error('The page redirected away from PerfectMind. Sign in on the official website first.');
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   const deadline = Date.now() + 45000;
@@ -31,7 +32,16 @@ async function collectCourtPage(request) {
   while(model.loading() && Date.now()<loadDeadline) await pause(250);
   if(model.loading()) throw new Error('The official availability request did not finish. Sign in, then try again.');
   if(!model.date() || dateKey(model.date())!==request.date) throw new Error('The official calendar did not switch to the requested date.');
-  if(Number(model.selectedDuration?.()?.Duration)!==30) throw new Error('The official booking duration is not 30 minutes.');
+  if(Number(model.selectedDuration?.()?.Duration)!==30) {
+    const choice=Array.from(model.durations()).find(item=>Number(item.Duration)===30);
+    const durationPicker=window.jQuery('#service-duration-dropdown').data('kendoDropDownList');
+    if(!choice||!durationPicker)throw new Error('The official 30-minute duration control was not found.');
+    durationPicker.value(JSON.stringify({DurationID:choice.DurationIDs[0],Duration:choice.Duration}));
+    durationPicker.trigger('change');
+    const durationDeadline=Date.now()+30000;
+    while(model.loading()&&Date.now()<durationDeadline)await pause(250);
+    if(model.loading()||Number(model.selectedDuration().Duration)!==30)throw new Error('The official 30-minute slots did not finish loading.');
+  }
   const headElements = [...element.querySelectorAll('.k-scheduler-header th')].filter(h => h.querySelector('.bm-booking-block-header-day'));
   if (!headElements.length) throw new Error('The calendar has no date columns. This cannot be treated as an empty result.');
   const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -65,4 +75,5 @@ async function collectCourtPage(request) {
   const bookCount=Array.from(rendered).filter(s=>/Book Now/i.test(s.textContent)).length;
   if(bookCount>0 && slots.length===0) throw new Error('The website shows available slots, but parsing returned none. The result has not been marked as successful.');
   return {dates:headers.map(h=>h.date),slots,observedAt:new Date().toISOString(),diagnostics:{dataCount:data.length,visibleBookCount:bookCount,slotCount:slots.length}};
+  } catch(error) {return {error:error?.message||'Unable to read the official availability calendar.'};}
 }
