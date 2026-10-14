@@ -1,6 +1,101 @@
 # PerfectMind Badminton Timetable
 
-Version: 1.1.0. A personal, local Manifest V3 extension for University of Melbourne badminton courts. No server, Node.js or Python is needed to use it.
+Version: 1.1.1. A personal, local Manifest V3 extension for University of Melbourne badminton courts. No server, Node.js or Python is needed to use it.
+
+## Feature screenshots
+
+These captures show the extension interface only. Click a feature below to see its screenshot. The main screenshots are from v1.1.1; the InPrivate example records an earlier successful test.
+
+![English interface, date and time filters, all eight court colours, default one-hour highlights and hidden empty rows](docs/images/overview.png)
+
+<details>
+<summary>Date/time filters, English interface, court colours and vertical alignment</summary>
+
+Choose a date interval and time range; the initial start time is 14:00. Each 30-minute row combines all eight courts. Fixed A–H lanes leave gaps for unavailable courts, keeping the same court vertically aligned. The previous availability query is restored on reopening.
+
+![Combined timetable with A–H court lanes and Melbourne dates](docs/images/duration-highlighting.png)
+
+</details>
+
+<details>
+<summary>Duration options and whole-cell highlighting</summary>
+
+Choose 30min, 1hr, 1hr30min or 2hr; 1hr is the default. Green cells mark start times with an available court in every consecutive half-hour for that duration. The court can change between sessions.
+
+![Four duration options, with 1hr selected by default](docs/images/duration-options.png)
+
+![Whole-cell duration highlights, with gaps in the fixed court lanes](docs/images/duration-highlighting.png)
+
+</details>
+
+<details>
+<summary>Eight background checks, loading warning, progress, Stop and unknown results</summary>
+
+All eight courts are checked concurrently in inactive tabs. The spinner and banner explain that multiple tabs will open. Court progress is reported individually. Stop closes the checking tabs and keeps results already retrieved. A question mark means that a court is still unchecked or failed; it is not treated as confirmed empty availability.
+
+![Loading warning, eight active checks, Stop control and unknown court results](docs/images/background-checking.png)
+
+</details>
+
+<details>
+<summary>Consecutive sessions across courts, with next-session locking</summary>
+
+The first badge selects 30 minutes. It stays highlighted, other sessions turn grey, and only the next consecutive half-hour on the same date remains selectable. This example starts on West E and allows the next session on East A–D.
+
+![Initial West E session and enabled next half-hour](docs/images/session-selection.png)
+
+</details>
+
+<details>
+<summary>Stable badge position when selection messages appear</summary>
+
+The grid stays at the same position on screen when selection feedback or warnings appear. Horizontal scrolling is preserved too. These crops use the same screen rectangle before and after clicking West E at 15:00.
+
+Before selection:
+
+![Before clicking: West E appears in its fixed lane at 15:00](docs/images/stable-before.png)
+
+After selection:
+
+![After clicking: the selected West E badge remains at the same screen position](docs/images/stable-after.png)
+
+</details>
+
+<details>
+<summary>Undo and Reset selection</summary>
+
+Undo removes the last selected half-hour; Reset clears the plan. Neither moves the timetable. If rechecking a completed plan fails, Retry opening booking pages is offered so that no order page opens until the entire plan has been verified.
+
+![Selection total, chosen session, Undo and Reset controls](docs/images/undo-reset.png)
+
+</details>
+
+<details>
+<summary>Complete duration, open booking pages and automatic login handling</summary>
+
+Once the selected sessions reach Duration, the extension rechecks them and opens the required booking pages. Consecutive sessions on the same court are grouped; a court change creates another page. This 1hr example opens two 30-minute pages. PerfectMind prompts for login when needed, and you complete each order yourself.
+
+![Extension confirms a one-hour plan across West E and East A and two opened booking pages](docs/images/booking-summary.png)
+
+</details>
+
+<details>
+<summary>HTML/data exports and hiding confirmed empty rows</summary>
+
+Export HTML saves a standalone offline timetable with the current colours, highlights and official timetable links. Export data saves availability and diagnostics as JSON. Hide confirmed empty rows is checked by default; unknown rows stay visible.
+
+![Export HTML, Export data and the default Hide confirmed empty rows control](docs/images/export-controls.png)
+
+</details>
+
+<details>
+<summary>InPrivate availability checking</summary>
+
+After allowing the extension in InPrivate, its panel opens in that window. This earlier v1.0.5 capture records all eight courts checked successfully while signed out. Later versions add the selection flow and fixed court lanes shown above.
+
+![Earlier extension-only InPrivate check with all eight courts successfully retrieved](docs/images/inprivate.png)
+
+</details>
 
 ## Install in Edge
 
@@ -41,7 +136,7 @@ The extension uses split mode and opens its panel in the window where you clicke
 
 `—` means no available courts were found after a successful check. `?` means a court has not been checked successfully. Unknown or failed results remain visible when empty rows are hidden. Hiding rows does not join separate periods into a continuous period.
 
-Every date column has eight fixed court lanes, A–H. Missing courts leave blank positions so sessions on the same court stay vertically aligned. Changing Duration clears an unfinished selection. Selection is temporary; exported HTML retains the full availability timetable and official timetable links.
+Every date column has eight fixed court lanes, A–H. Missing courts leave blank positions so sessions on the same court stay vertically aligned. The timetable keeps its screen position and horizontal scroll when selection feedback, warnings, Undo or Reset change the page above it. Changing Duration clears an unfinished selection. Selection is temporary; exported HTML retains the full availability timetable and official timetable links.
 
 Opening `index.html` directly displays the panel, but checking availability requires opening it from the installed extension.
 
@@ -68,6 +163,8 @@ Opening `index.html` directly displays the panel, but checking availability requ
 
 ## Versions
 
+- **1.1.1**: anchors the timetable during selection feedback and notices, preserves horizontal scrolling and keyboard focus, and adds an extension-only screenshot guide to the README.
+
 - **1.1.0**: consecutive 30-minute session selection across courts, initial-session highlighting and next-slot locking, undo/reset/retry, revalidation of the full plan before opening order pages, same-court grouping, vertically aligned A–H lanes, retained-duration normalization and clearer collection errors.
 - **1.0.8**: always checks all eight courts together, removes the parallel-count control, and lets PerfectMind handle login automatically through its direct booking route.
 - **1.0.7**: visible loading spinner and background-tab notice; court clicks open the official booking form using fresh availability and the selected duration, with login return routing when required.
@@ -82,6 +179,6 @@ Installation reference: [Microsoft Edge documentation](https://learn.microsoft.c
 
 ## Developer verification
 
-With Node.js installed, run `node tests/parallel.test.cjs`, `node tests/booking.test.cjs`, `node tests/selection.test.cjs` and `node tests/collector.test.cjs`. Checks cover parallel loading, loading-notice cleanup, slot/date locking, duration totals, cross-court plans, adjacent grouping, revalidation failure cleanup, undo/reset, destination validation and duplicate-page prevention.
+With Node.js installed, run `node tests/parallel.test.cjs`, `node tests/booking.test.cjs`, `node tests/selection.test.cjs`, `node tests/collector.test.cjs` and `node tests/layout.test.cjs`. Checks cover parallel loading, loading-notice cleanup, slot/date locking, duration totals, cross-court plans, adjacent grouping, revalidation failure cleanup, undo/reset, destination validation, duplicate-page prevention, and stable vertical/horizontal positioning during selection, notices and undo/reset.
 
 Live verification in Edge for 26–30 October 2026: all eight courts checked in 5.6 seconds; West E 15:00–15:30 plus East A 15:30–16:00 opened two official 30-minute booking routes, each redirected to PerfectMind login for a signed-out session. No orders were submitted.

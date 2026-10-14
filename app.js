@@ -111,8 +111,38 @@ function renderSelection(){
   $('reset-selection').disabled=bookingBusy;
   $('retry-booking').hidden=!(total===selection.duration&&!bookingBusy&&!selection.opened&&selection.failure);
 }
-function render() {renderSelection();if(snapshot){$('result').innerHTML=renderTable(snapshot,$('hide-empty').checked,selectedDuration());$('export').disabled=false;$('json').disabled=false;}}
-function resetSelection(){if(bookingBusy)return;selection=null;$('notice').hidden=true;render();}
+function preserveTimetablePosition(update) {
+  // Anchor the existing table in the viewport before feedback above it changes.
+  // Keep its horizontal position too: rebuilding the grid otherwise resets it.
+  const result=$('result'), previous=result.querySelector?.('.table-wrap');
+  const anchor=previous?{top:previous.getBoundingClientRect().top,left:previous.scrollLeft}:null;
+  update();
+  const current=result.querySelector?.('.table-wrap');
+  if(anchor&&current){
+    current.scrollLeft=anchor.left;
+    const shift=current.getBoundingClientRect().top-anchor.top;
+    if(shift)window.scrollBy(0,shift);
+  }
+}
+function setNotice(message='') {
+  preserveTimetablePosition(()=>{$('notice').hidden=!message;$('notice').textContent=message;});
+}
+function render() {
+  const result=$('result'),focused=document.activeElement?.closest?.('a.court-link');
+  const focusKey=focused?.dataset;
+  preserveTimetablePosition(()=>{
+    renderSelection();
+    if(snapshot)result.innerHTML=renderTable(snapshot,$('hide-empty').checked,selectedDuration());
+  });
+  if(snapshot){
+    if(focusKey){
+      const replacement=Array.from(result.querySelectorAll('a.court-link')).find(link=>link.dataset.court===focusKey.court&&link.dataset.date===focusKey.date&&link.dataset.start===focusKey.start);
+      replacement?.focus({preventScroll:true});
+    }
+    $('export').disabled=false;$('json').disabled=false;
+  }
+}
+function resetSelection(){if(bookingBusy)return;selection=null;setNotice();render();}
 function undoSelection(){if(!selection||bookingBusy||selection.opened)return;selection.slots.pop();selection.failure=null;if(!selection.slots.length)selection=null;render();}
 function addSession(court,date,start){
   if(!snapshot||running||bookingBusy||selection?.opened)throw new Error('Wait for checking to finish, or reset your previous selection.');
@@ -160,9 +190,9 @@ async function start(event){
   const query={from:$('from').value,to:$('to').value,timeFrom:$('time-from').value,timeTo:$('time-to').value,parallelCourts:PARALLEL_COURTS};
   if(query.from>query.to||minutes(query.timeFrom)>=minutes(query.timeTo)||minutes(query.timeFrom)%30||minutes(query.timeTo)%30){$('status').textContent='Check the date order and use start and end times on 30-minute boundaries.';return;}
   if(datesBetween(query.from,query.to).length>42){$('status').textContent='You can check up to 42 days at once. Choose a shorter date range.';return;}
-  if(!extension){$('notice').hidden=false;$('notice').textContent='Load this project as an Edge extension, then click its icon to open the panel. Opening the HTML file directly does not grant access to the official website.';return;}
+  if(!extension){setNotice('Load this project as an Edge extension, then click its icon to open the panel. Opening the HTML file directly does not grant access to the official website.');return;}
   const startedAt=Date.now();
-  stopped=false;running=true;selection=null;$('start').disabled=true;$('stop').disabled=false;$('notice').hidden=true;resetProgress();
+  stopped=false;running=true;selection=null;$('start').disabled=true;$('stop').disabled=false;setNotice();resetProgress();
   setCheckingLoader(true,query.parallelCourts);
   snapshot={version:2,timeZone:'Australia/Melbourne',query,slots:[],coverage:{},diagnostics:[],errors:[],updatedAt:new Date().toISOString()};render();
   let active=0,finished=0;
@@ -201,7 +231,7 @@ async function start(event){
     },()=>stopped);
     const rejected=workers.find(worker=>worker.status==='rejected');
     if(rejected)throw rejected.reason;
-  } catch(error){$('notice').hidden=false;$('notice').textContent=error.message;}
+  } catch(error){setNotice(error.message);}
   finally {
     await Promise.allSettled(Array.from(workerTabs,closeWorkerTab));
     running=false;$('start').disabled=false;$('stop').disabled=true;
@@ -224,12 +254,12 @@ async function init(){
   const today=melbourneToday();$('from').value=today;$('to').value=addDays(today,6);$('duration').value='60';$('hide-empty').checked=true;$('legend').innerHTML=legendHtml();resetProgress();
   renderSelection();
   if(extension){const saved=await chrome.storage.local.get('snapshot');if(saved.snapshot?.version===2){snapshot=saved.snapshot;for(const [id,key] of [['from','from'],['to','to'],['time-from','timeFrom'],['time-to','timeTo']])$(id).value=snapshot.query[key];$('status').textContent='Restored your last availability snapshot. Click Check availability to refresh.';render();}else if(saved.snapshot){await chrome.storage.local.remove('snapshot');$('status').textContent='Cleared an older snapshot that may contain incorrect empty results. Please check availability again.';}}
-  else{$('notice').hidden=false;$('notice').textContent='This is the local extension panel. Follow the README to load it into Edge, then open it using the extension icon.';}
+  else{setNotice('This is the local extension panel. Follow the README to load it into Edge, then open it using the extension icon.');}
 }
 async function openSelectedBookings(){
   if(!selection||bookingBusy||selection.opened||selection.slots.length*30!==selection.duration)return;
   const current=selection,plan=buildBookingPlan(current.slots),pending=new Set(),opened=[];
-  bookingBusy=true;current.failure=null;$('start').disabled=true;$('duration').disabled=true;$('notice').hidden=true;render();
+  bookingBusy=true;current.failure=null;$('start').disabled=true;$('duration').disabled=true;setNotice();render();
   try{
     const panel=await chrome.tabs.getCurrent();
     if(!Number.isInteger(panel?.windowId))throw new Error('Reopen the extension panel and try again.');
@@ -252,11 +282,11 @@ async function openSelectedBookings(){
       pending.delete(check.value.tabId);opened.push(check.value.tabId);
     }
     current.opened=true;current.openCount=opened.length;
-    $('notice').hidden=false;$('notice').textContent=`Opened ${opened.length} official booking page(s). PerfectMind will prompt for login if needed. Review the sessions and complete each order there.`;
+    setNotice(`Opened ${opened.length} official booking page(s). PerfectMind will prompt for login if needed. Review the sessions and complete each order there.`);
   }catch(error){
     current.failure=error.message||'Unable to open the selected booking pages.';
     current.openCount=opened.length;current.opened=opened.length>0;
-    $('notice').hidden=false;$('notice').textContent=`${opened.length?`${opened.length} page(s) opened. `:'No booking pages were opened. '}${current.failure}`;
+    setNotice(`${opened.length?`${opened.length} page(s) opened. `:'No booking pages were opened. '}${current.failure}`);
   }finally{
     await Promise.allSettled(Array.from(pending,id=>chrome.tabs.remove(id)));
     bookingBusy=false;$('start').disabled=running;$('duration').disabled=false;render();
@@ -269,8 +299,8 @@ function onSlotClick(event){
   if(event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;
   event.preventDefault();const court=COURTS.find(c=>c.letter===link.dataset.court),date=link.dataset.date,start=Number(link.dataset.start);
   if(!court||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isInteger(start)||start<0||start>=1440||start%30)return;
-  try{const ready=addSession(court.letter,date,start);$('notice').hidden=true;render();if(ready)openSelectedBookings();}
-  catch(error){$('notice').hidden=false;$('notice').textContent=error.message;}
+  try{const ready=addSession(court.letter,date,start);setNotice();render();if(ready)openSelectedBookings();}
+  catch(error){setNotice(error.message);}
 }
 $('duration').addEventListener('change',resetSelection);
 $('undo-selection').addEventListener('click',undoSelection);
