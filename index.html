@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PerfectMind Badminton Timetable</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="collector.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+<main>
+  <header><p class="eyebrow">MELBOURNE UNIVERSITY SPORT</p><h1>Badminton Availability</h1><p class="sub">East A–D · West E–H · Melbourne local time · 30-minute slots</p></header>
+  <form id="query">
+    <label>Start date<input id="from" type="date" required></label>
+    <label>End date<input id="to" type="date" required></label>
+    <label>Start time<input id="time-from" type="time" step="1800" value="14:00" required></label>
+    <label>End time<input id="time-to" type="time" step="1800" value="22:00" required></label>
+    <button id="start" class="primary" type="submit">Check availability</button>
+    <button id="stop" type="button" disabled>Stop</button>
+  </form>
+  <div class="actions"><label class="compact" for="duration">Duration<select id="duration"><option value="30">30min</option><option value="60" selected>1hr</option><option value="90">1hr30min</option><option value="120">2hr</option></select></label><a href="https://unimelb.perfectmind.com/MyProfile/Contact" target="_blank" rel="noopener">Open official login</a><button id="export" disabled>Export HTML</button><button id="json" disabled>Export data</button><label class="compact"><input id="hide-empty" type="checkbox" checked>Hide confirmed empty rows</label></div>
+  <p class="duration-note">Highlighted cells have an available court for every consecutive 30-minute slot from that time, within the displayed range. You can switch courts. Click a court to open its official timetable.</p>
+  <p id="notice" class="notice" hidden></p>
+  <p id="status" role="status" aria-live="polite">Choose your dates to check availability. Sign in on the official website if needed.</p>
+  <ol id="court-progress" aria-label="Court loading status"></ol>
+  <ul id="legend" aria-label="Court colour legend"></ul>
+  <section id="result"><p class="empty">Your combined timetable will appear here.</p></section>
+  <footer>— = no available courts; ? = not yet checked or failed. Results are a snapshot; confirm availability on the official website. Keep this tab open while checking.</footer>
+</main>
+</body>
+</html>
