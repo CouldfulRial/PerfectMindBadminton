@@ -1,6 +1,6 @@
 # PerfectMind Badminton Timetable
 
-Version: 1.0.4. A personal, local Manifest V3 extension for University of Melbourne badminton courts. No server, Node.js or Python is needed to use it.
+Version: 1.0.5. A personal, local Manifest V3 extension for University of Melbourne badminton courts. No server, Node.js or Python is needed to use it.
 
 ## Install in Edge
 
@@ -10,9 +10,22 @@ Version: 1.0.4. A personal, local Manifest V3 extension for University of Melbou
 4. Select the project folder containing `manifest.json`.
 5. Click **PerfectMind Badminton Timetable** in the extensions menu. You can pin its icon to the toolbar.
 
-Chrome also works; its management page is `chrome://extensions`. Use a regular browser window.
+Chrome also works; its management page is `chrome://extensions`.
 
 To update an existing installation, click **Reload** on its extension card, then reopen the panel. If you installed a copied or unzipped folder, replace that folder's files first.
+
+## InPrivate and sign-in
+
+Opening the extension panel does not require a PerfectMind login. Sign in on the official website only if it requires authentication to display availability or make a booking.
+
+To use the extension in Edge InPrivate:
+
+1. Open `edge://extensions` in a regular Edge window.
+2. Click **Details** for **PerfectMind Badminton Timetable**.
+3. Enable **Allow in InPrivate**.
+4. Open an InPrivate window and click the extension icon.
+
+The extension uses split mode and opens its panel in the window where you clicked the icon. Website cookies are separate in InPrivate: a regular-window PerfectMind login does not sign you into InPrivate. Extension-local availability snapshots are shared between regular and InPrivate windows.
 
 ## Use
 
@@ -50,6 +63,7 @@ Opening `index.html` directly displays the panel, but checking availability requ
 
 ## Versions
 
+- **1.0.5**: split-mode InPrivate support; opens the panel in the window where its icon was clicked.
 - **1.0.4**: English interface, metadata, progress and error messages, date headings, HTML exports and documentation.
 - **1.0.3**: whole-cell highlighting with court switching; defaults to 1hr and hidden confirmed empty rows.
 - **1.0.2**: duration selector and clickable official court links.
