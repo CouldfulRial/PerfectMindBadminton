@@ -3,7 +3,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const vm=require('node:vm');
 const elements=new Map();
-const element=id=>{if(!elements.has(id))elements.set(id,{value:'',checked:false,hidden:true,innerHTML:'',textContent:'',disabled:false,addEventListener(){}});return elements.get(id);};
+const element=id=>{if(!elements.has(id))elements.set(id,{value:'',checked:false,hidden:true,dataset:{},innerHTML:'',textContent:'',disabled:false,addEventListener(){}});return elements.get(id);};
 let scrollY=260,wrap=null,focusOptions;
 const tableTop=()=>1000+(element('selection-panel').hidden?0:180)+(element('notice').hidden?0:60)-scrollY;
 const result=element('result');
