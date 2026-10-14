@@ -10,7 +10,9 @@ const COURTS = [
 ];
 const $ = id => document.getElementById(id);
 const extension = Boolean(globalThis.chrome?.runtime?.id && chrome.scripting);
-let snapshot = null, running = false, stopped = false, workerTab = null;
+let snapshot = null, running = false, stopped = false;
+const workerTabs=new Set();
+let persistQueue=Promise.resolve();
 const escapeHtml = s => String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const timeText = n => `${String(Math.floor(n/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`;
 const minutes = s => Number(s.split(':')[0])*60+Number(s.split(':')[1]);
@@ -73,25 +75,53 @@ async function waitForTab(id,ignoreStop=false) {
   for(let i=0;i<90;i++) {if(stopped&&!ignoreStop)throw new Error('Stopped');const tab=await chrome.tabs.get(id);if(tab.status==='complete')return;await new Promise(r=>setTimeout(r,500));}
   throw new Error('The official page took too long to load');
 }
-async function persist(){if(extension)await chrome.storage.local.set({snapshot});}
+async function persist(){
+  if(!extension)return;
+  const saved=structuredClone(snapshot);
+  persistQueue=persistQueue.catch(()=>{}).then(()=>chrome.storage.local.set({snapshot:saved}));
+  await persistQueue;
+}
+function selectedParallel(){const n=Number($('parallel').value);return [1,2,4,8].includes(n)?n:4;}
+async function runCourtPool(items,limit,task,shouldStop){
+  let next=0;
+  return Promise.allSettled(Array.from({length:Math.min(limit,items.length)},async()=>{
+    while(!shouldStop() && next<items.length){const item=items[next++];await task(item);}
+  }));
+}
+async function closeWorkerTab(id){
+  if(!workerTabs.delete(id))return;
+  try{await chrome.tabs.remove(id);}catch{}
+}
+function requestStop(){
+  stopped=true;$('status').textContent='Stopping… Results already retrieved will be kept.';
+  Promise.allSettled(Array.from(workerTabs,closeWorkerTab));
+}
 async function start(event){
   event.preventDefault();if(running)return;
-  const query={from:$('from').value,to:$('to').value,timeFrom:$('time-from').value,timeTo:$('time-to').value};
+  const query={from:$('from').value,to:$('to').value,timeFrom:$('time-from').value,timeTo:$('time-to').value,parallelCourts:selectedParallel()};
   if(query.from>query.to||minutes(query.timeFrom)>=minutes(query.timeTo)||minutes(query.timeFrom)%30||minutes(query.timeTo)%30){$('status').textContent='Check the date order and use start and end times on 30-minute boundaries.';return;}
   if(datesBetween(query.from,query.to).length>42){$('status').textContent='You can check up to 42 days at once. Choose a shorter date range.';return;}
   if(!extension){$('notice').hidden=false;$('notice').textContent='Load this project as an Edge extension, then click its icon to open the panel. Opening the HTML file directly does not grant access to the official website.';return;}
-  stopped=false;running=true;$('start').disabled=true;$('stop').disabled=false;resetProgress();
+  const startedAt=Date.now();
+  stopped=false;running=true;$('start').disabled=true;$('stop').disabled=false;$('parallel').disabled=true;$('notice').hidden=true;resetProgress();
   snapshot={version:2,timeZone:'Australia/Melbourne',query,slots:[],coverage:{},diagnostics:[],errors:[],updatedAt:new Date().toISOString()};render();
+  let active=0,finished=0;
+  const updateProgress=()=>{if(!stopped)$('status').textContent=`Checking in background · ${active} active · ${finished}/8 courts finished (${query.parallelCourts} at a time)`;};
   try {
-    workerTab=(await chrome.tabs.create({url:facilityUrl(COURTS[0],query.from),active:false})).id;
-    for(const [courtIndex,court] of COURTS.entries()){
-      if(stopped)break;snapshot.coverage[court.letter]={};let cursor=query.from;
+    const panel=await chrome.tabs.getCurrent();
+    if(!Number.isInteger(panel?.windowId))throw new Error('Unable to identify this panel window. Reopen the extension panel and try again.');
+    const workers=await runCourtPool(COURTS,query.parallelCourts,async court=>{
+      snapshot.coverage[court.letter]={};let cursor=query.from,tabId=null;
+      active++;updateProgress();setCourtState(court.letter,'loading',`Loading ${cursor}`);
       try {
+        const tab=await chrome.tabs.create({url:facilityUrl(court,cursor),windowId:panel.windowId,active:false});
+        tabId=tab.id;workerTabs.add(tabId);
         while(cursor<=query.to&&!stopped){
-          setCourtState(court.letter,'loading',`Loading ${cursor}`);$('status').textContent=`Checking ${court.name} · ${cursor} (${courtIndex+1}/8)`;
-          if(courtIndex||cursor!==query.from)await chrome.tabs.update(workerTab,{url:facilityUrl(court,cursor)});
-          await waitForTab(workerTab);if(stopped)break;
-          const results=await chrome.scripting.executeScript({target:{tabId:workerTab},world:'MAIN',func:collectCourtPage,args:[{date:cursor,court:court.letter}]});
+          setCourtState(court.letter,'loading',`Loading ${cursor}`);
+          if(cursor!==query.from)await chrome.tabs.update(tabId,{url:facilityUrl(court,cursor)});
+          await waitForTab(tabId);if(stopped)break;
+          const results=await chrome.scripting.executeScript({target:{tabId},world:'MAIN',func:collectCourtPage,args:[{date:cursor,court:court.letter}]});
+          if(stopped)break;
           const page=results[0]?.result;if(!page?.dates?.includes(cursor))throw new Error('The requested date was not returned');
           snapshot.diagnostics.push({court:court.name,date:cursor,...page.diagnostics});
           for(const d of page.dates)if(d>=query.from&&d<=query.to)snapshot.coverage[court.letter][d]=page.observedAt;
@@ -102,15 +132,23 @@ async function start(event){
         const count=snapshot.slots.filter(s=>s.court===court.letter).length;
         setCourtState(court.letter,stopped?'pending':'ok',stopped?'Stopped':`Done · ${count} slots`);
       } catch(error){
-        snapshot.errors.push({court:court.name,date:cursor,message:error.message});setCourtState(court.letter,'error',error.message);await persist();render();
+        if(stopped)setCourtState(court.letter,'pending','Stopped');
+        else {snapshot.errors.push({court:court.name,date:cursor,message:error.message});setCourtState(court.letter,'error',error.message);await persist();render();}
+      } finally {
+        if(tabId!==null)await closeWorkerTab(tabId);
+        active--;finished++;updateProgress();
       }
-    }
+    },()=>stopped);
+    const rejected=workers.find(worker=>worker.status==='rejected');
+    if(rejected)throw rejected.reason;
   } catch(error){$('notice').hidden=false;$('notice').textContent=error.message;}
   finally {
-    if(workerTab!==null){try{await chrome.tabs.remove(workerTab);}catch{}workerTab=null;}
-    running=false;$('start').disabled=false;$('stop').disabled=true;
+    await Promise.allSettled(Array.from(workerTabs,closeWorkerTab));
+    running=false;$('start').disabled=false;$('stop').disabled=true;$('parallel').disabled=false;
     const dates=datesBetween(query.from,query.to);const complete=COURTS.filter(c=>dates.every(d=>snapshot.coverage[c.letter]?.[d])).length;
-    $('status').textContent=stopped?`Stopped. Results retrieved so far are saved (${complete}/8 courts complete).`:`Finished: ${complete}/8 courts checked successfully.${complete<8?' Failed courts show ?. Sign in on the official website, then try again.':''}`;
+    const elapsedMs=Date.now()-startedAt;
+    snapshot.timing={elapsedMs,parallelCourts:query.parallelCourts};
+    $('status').textContent=stopped?`Stopped. Results retrieved so far are saved (${complete}/8 courts complete).`:`Finished: ${complete}/8 courts checked successfully in ${(elapsedMs/1000).toFixed(1)}s (${query.parallelCourts} at a time).${complete<8?' Failed courts show ?. Sign in on the official website, then try again.':''}`;
     snapshot.updatedAt=new Date().toISOString();await persist();render();
   }
 }
@@ -122,7 +160,7 @@ async function exportHtml(){
   download(`badminton-${snapshot.query.from}-${snapshot.query.to}.html`,`<!doctype html><html lang="en-AU"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Badminton Timetable</title><style>${css}</style></head><body>${body}</body></html>`,'text/html;charset=utf-8');
 }
 async function init(){
-  const today=melbourneToday();$('from').value=today;$('to').value=addDays(today,6);$('duration').value='60';$('hide-empty').checked=true;$('legend').innerHTML=legendHtml();resetProgress();
+  const today=melbourneToday();$('from').value=today;$('to').value=addDays(today,6);$('parallel').value='4';$('duration').value='60';$('hide-empty').checked=true;$('legend').innerHTML=legendHtml();resetProgress();
   if(extension){const saved=await chrome.storage.local.get('snapshot');if(saved.snapshot?.version===2){snapshot=saved.snapshot;for(const [id,key] of [['from','from'],['to','to'],['time-from','timeFrom'],['time-to','timeTo']])$(id).value=snapshot.query[key];$('status').textContent='Restored your last availability snapshot. Click Check availability to refresh.';render();}else if(saved.snapshot){await chrome.storage.local.remove('snapshot');$('status').textContent='Cleared an older snapshot that may contain incorrect empty results. Please check availability again.';}}
   else{$('notice').hidden=false;$('notice').textContent='This is the local extension panel. Follow the README to load it into Edge, then open it using the extension icon.';}
 }
@@ -156,6 +194,6 @@ async function onSlotClick(event){
 }
 $('duration').addEventListener('change',render);
 $('result').addEventListener('click',onSlotClick);
-$('query').addEventListener('submit',start);$('stop').addEventListener('click',()=>{stopped=true;$('status').textContent='Stopping… Results already retrieved will be kept.';});$('hide-empty').addEventListener('change',render);$('export').addEventListener('click',()=>exportHtml().catch(e=>{$('status').textContent=`Export failed: ${e.message}`;}));$('json').addEventListener('click',()=>download('badminton-availability.json',JSON.stringify(snapshot,null,2),'application/json'));
+$('query').addEventListener('submit',start);$('stop').addEventListener('click',requestStop);$('hide-empty').addEventListener('change',render);$('export').addEventListener('click',()=>exportHtml().catch(e=>{$('status').textContent=`Export failed: ${e.message}`;}));$('json').addEventListener('click',()=>download('badminton-availability.json',JSON.stringify(snapshot,null,2),'application/json'));
 window.addEventListener('beforeunload',event=>{if(running){event.preventDefault();event.returnValue='';}});
 init().catch(e=>{$('status').textContent=`Initialisation failed: ${e.message}`;});

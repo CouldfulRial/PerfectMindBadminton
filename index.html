@@ -16,6 +16,7 @@
     <label>End date<input id="to" type="date" required></label>
     <label>Start time<input id="time-from" type="time" step="1800" value="14:00" required></label>
     <label>End time<input id="time-to" type="time" step="1800" value="22:00" required></label>
+    <label>Parallel courts<select id="parallel"><option value="1">1 at a time</option><option value="2">2 at a time</option><option value="4" selected>4 at a time</option><option value="8">All 8 at once</option></select></label>
     <button id="start" class="primary" type="submit">Check availability</button>
     <button id="stop" type="button" disabled>Stop</button>
   </form>
@@ -26,7 +27,7 @@
   <ol id="court-progress" aria-label="Court loading status"></ol>
   <ul id="legend" aria-label="Court colour legend"></ul>
   <section id="result"><p class="empty">Your combined timetable will appear here.</p></section>
-  <footer>— = no available courts; ? = not yet checked or failed. Results are a snapshot; confirm availability on the official website. Keep this tab open while checking.</footer>
+  <footer>— = no available courts; ? = not yet checked or failed. Results are a snapshot; confirm availability on the official website. Official pages load in inactive background tabs and close automatically. You can use other tabs, but keep this panel open while checking.</footer>
 </main>
 </body>
 </html>
